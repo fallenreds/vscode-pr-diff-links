@@ -80,6 +80,7 @@ async function openDiff({ repo, base, head, path: relPath, line, title }) {
   if (!repo || !base || !head || !relPath) {
     throw new Error('Link must have repo, base, head and path');
   }
+  if (!fs.existsSync(repo)) throw new Error(`Repository folder not found: ${repo}`);
   const root = (await git(repo, ['rev-parse', '--show-toplevel'])).trim();
 
   let mergeBase;
