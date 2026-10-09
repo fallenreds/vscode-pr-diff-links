@@ -1,47 +1,83 @@
 #!/usr/bin/env python3
-"""Print a Markdown link that opens a side-by-side diff via the PR Diff Links extension.
+"""Print a Markdown link to the diff of one file (optionally at a line) of a pull request.
 
 Usage:
-  prdiff-link [--uri | --file DIR] [--text TEXT] REPO BASE HEAD PATH [LINE]
+  prdiff-link --pr N [--repo DIR] [--github] [--text TEXT] PATH [LINE]
+  prdiff-link --refs BASE HEAD [--url PR_URL] [--repo DIR] [--github] [--text TEXT] PATH [LINE]
 
-  --uri       vscode://fallenreds.pr-diff-links/open?... link
-  --file DIR  write DIR/<path with / -> __>__L<line>.prdiff and link to it by absolute path (default)
+Without --github the link points to a small .prdiff file. Clicking it in VS Code makes the
+PR Diff Links extension open a side-by-side diff (merge base of BASE and HEAD vs HEAD).
+The link is a bare absolute path because the Claude Code chat drops every link scheme
+except http(s)/mailto, file:// and vscode:// included.
 
-The Claude Code chat strips every link scheme except http(s)/mailto, so file links must be
-bare absolute paths without a colon.
+With --github the link points to the same place in the "Files changed" tab of the PR.
+
+--pr resolves BASE/HEAD to the PR's baseRefOid/headRefOid via gh, so links keep working
+after the PR is merged and its branches or worktrees are gone.
 """
 import argparse
+import hashlib
 import json
 import os
+import subprocess
 import sys
-from urllib.parse import urlencode
+
+
+def run(cmd, cwd):
+    return subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def resolve_pr(repo, number, cache_dir):
+    cache = os.path.join(cache_dir, f"pr{number}.json")
+    if os.path.exists(cache):
+        with open(cache, encoding="utf-8") as f:
+            return json.load(f)
+    data = json.loads(run(["gh", "pr", "view", str(number), "--json", "baseRefOid,headRefOid,url,state"], repo))
+    # An open PR moves with every push, so only finished ones are cached.
+    if data["state"] != "OPEN":
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(cache, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    return data
 
 
 def main():
-    p = argparse.ArgumentParser()
-    mode = p.add_mutually_exclusive_group()
-    mode.add_argument("--uri", action="store_true")
-    mode.add_argument("--file", metavar="DIR")
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    src = p.add_mutually_exclusive_group(required=True)
+    src.add_argument("--pr", type=int)
+    src.add_argument("--refs", nargs=2, metavar=("BASE", "HEAD"))
+    p.add_argument("--url", help="PR URL, needed for --github together with --refs")
+    p.add_argument("--repo", default=".")
+    p.add_argument("--github", action="store_true")
     p.add_argument("--text")
-    p.add_argument("repo")
-    p.add_argument("base")
-    p.add_argument("head")
+    p.add_argument("--out", help="directory for .prdiff files (default ~/.cache/prdiff/<repo>/<head>)")
     p.add_argument("path")
     p.add_argument("line", nargs="?", type=int)
     a = p.parse_args()
 
-    spec = {"repo": os.path.abspath(a.repo), "base": a.base, "head": a.head, "path": a.path}
-    if a.line:
-        spec["line"] = a.line
-    text = a.text or (f"{os.path.basename(a.path)}:{a.line}" if a.line else os.path.basename(a.path))
-
-    if a.uri:
-        target = "vscode://fallenreds.pr-diff-links/open?" + urlencode({k: str(v) for k, v in spec.items()})
+    repo = run(["git", "rev-parse", "--show-toplevel"], os.path.abspath(a.repo))
+    cache_root = os.path.join(os.path.expanduser("~/.cache/prdiff"), os.path.basename(repo))
+    if a.pr:
+        pr = resolve_pr(repo, a.pr, cache_root)
+        base, head, url = pr["baseRefOid"], pr["headRefOid"], pr["url"]
     else:
-        out_dir = os.path.abspath(a.file or os.path.join(os.getcwd(), "prdiff"))
+        base, head, url = a.refs[0], a.refs[1], a.url
+
+    name = os.path.basename(a.path)
+    text = a.text or (f"{name}:{a.line}" if a.line else name)
+
+    if a.github:
+        if not url:
+            sys.exit("--github needs --pr or --url")
+        anchor = "diff-" + hashlib.sha256(a.path.encode()).hexdigest() + (f"R{a.line}" if a.line else "")
+        target = f"{url}/files#{anchor}"
+    else:
+        spec = {"repo": repo, "base": base, "head": head, "path": a.path}
+        if a.line:
+            spec["line"] = a.line
+        out_dir = os.path.abspath(a.out or os.path.join(cache_root, head[:12]))
         os.makedirs(out_dir, exist_ok=True)
-        name = a.path.replace("/", "__") + (f"__L{a.line}" if a.line else "") + ".prdiff"
-        fname = os.path.join(out_dir, name)
+        fname = os.path.join(out_dir, a.path.replace("/", "__") + (f"__L{a.line}" if a.line else "") + ".prdiff")
         with open(fname, "w", encoding="utf-8") as f:
             json.dump(spec, f, ensure_ascii=False)
         target = fname
