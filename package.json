@@ -1,0 +1,30 @@
+{
+  "name": "pr-diff-links",
+  "displayName": "PR Diff Links",
+  "description": "Open a side-by-side diff of a file between two git refs from a vscode:// link or a .prdiff file.",
+  "version": "0.0.1",
+  "publisher": "fallenreds",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "activationEvents": [
+    "onUri",
+    "onLanguage:prdiff",
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "prdiff",
+        "extensions": [".prdiff"],
+        "aliases": ["PR diff link"]
+      }
+    ]
+  }
+}
