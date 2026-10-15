@@ -92,4 +92,9 @@ function isViewed(stored, blob) {
   return Boolean(stored) && stored === blob;
 }
 
-module.exports = { parseGitHubRemote, parsePrUrl, prKey, parseDiffRaw, buildFileTree, filesUnder, isViewed };
+// Integration branches change only through a PR, never by a push from the tree.
+function isProtected(branch, protectedBranches) {
+  return Array.isArray(protectedBranches) && protectedBranches.includes(branch);
+}
+
+module.exports = { parseGitHubRemote, parsePrUrl, prKey, parseDiffRaw, buildFileTree, filesUnder, isViewed, isProtected };

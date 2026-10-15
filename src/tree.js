@@ -1,12 +1,13 @@
 const vscode = require('vscode');
 const { listPrs, viewPr, ensureCommits } = require('./github');
 const { aheadCount, branchSha, diffFiles, git, hasCommit, localBranches, push } = require('./git');
-const { buildFileTree, filesUnder, isViewed, parsePrUrl, prKey } = require('./model');
+const { buildFileTree, filesUnder, isProtected, isViewed, parsePrUrl, prKey } = require('./model');
 const { EMPTY_SCHEME, GIT_SCHEME } = require('./diff');
 
 const TREE_SCHEME = 'prdiff-tree';
 const LINKS_KEY = 'links';
 const MAX_LINKS = 20;
+const PROTECTED_DEFAULT = ['main', 'master', 'develop', 'stage'];
 const REFS_POLL_MS = 5000;
 const LISTS_POLL_MS = 5 * 60 * 1000;
 const { Collapsed, Expanded, None } = vscode.TreeItemCollapsibleState;
@@ -59,6 +60,9 @@ class PrTreeProvider {
       this.changed,
       this.view.onDidChangeCheckboxState(e => this.markViewed(e.items)),
       this.view.onDidChangeVisibility(() => this.schedule()),
+      vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('prDiffLinks.protectedBranches')) this.pollRefs();
+      }),
       { dispose: () => this.stopTimers() },
       vscode.window.registerFileDecorationProvider({ provideFileDecoration: decoration }),
     );
@@ -154,8 +158,13 @@ class PrTreeProvider {
   async push(node) {
     const pr = this.prs.get(node.key);
     const repo = pr && this.registry.get(pr.slug);
-    if (!repo || !pr.localSha) return;
+    if (!repo) return;
     const branch = pr.info.headRefName;
+    // The command can be run without the menu, so the menu condition is not enough.
+    if (isProtected(branch, protectedBranches())) {
+      throw new Error(`${branch} is protected (prDiffLinks.protectedBranches), change it through a pull request`);
+    }
+    if (!pr.localSha) return;
     await vscode.window.withProgress(
       { location: vscode.ProgressLocation.Notification, title: `Pushing ${branch} to ${repo.remote}…` },
       () => push(repo.root, repo.remote, branch),
@@ -518,9 +527,14 @@ function prIcon(info) {
   return new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
 }
 
-// Pushing a fork branch or a finished PR would not update it.
+// Pushing a fork branch or a finished PR would not update it, and a protected branch
+// (a release PR such as stage → main) must not be pushed at all.
 function pushable(info) {
-  return info.state === 'OPEN' && !info.isCrossRepository;
+  return info.state === 'OPEN' && !info.isCrossRepository && !isProtected(info.headRefName, protectedBranches());
+}
+
+function protectedBranches() {
+  return vscode.workspace.getConfiguration('prDiffLinks').get('protectedBranches', PROTECTED_DEFAULT);
 }
 
 // Compared with the PR head on GitHub, not with origin/<branch>, which may be stale.

@@ -114,6 +114,19 @@
           "type": "boolean",
           "default": true,
           "description": "Reveal and select the file in the Pull Requests panel when a .prdiff link opens its diff. Revealing switches the sidebar to the panel, so turn this off if the panel shares the sidebar with a view you want to keep in front."
+        },
+        "prDiffLinks.protectedBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "main",
+            "master",
+            "develop",
+            "stage"
+          ],
+          "description": "Branches that are never pushed from the Pull Requests panel: a PR whose head is one of them gets no push button and no ↑N. Exact branch names."
         }
       }
     }

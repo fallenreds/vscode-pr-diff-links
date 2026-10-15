@@ -8,6 +8,7 @@ const {
   buildFileTree,
   filesUnder,
   isViewed,
+  isProtected,
 } = require('../src/model');
 
 test('parseGitHubRemote reads ssh and https remotes', () => {
@@ -136,4 +137,15 @@ test('isViewed matches only the blob that was marked', () => {
   assert.equal(isViewed(BLOB_A, BLOB_B), false);
   assert.equal(isViewed(undefined, BLOB_A), false);
   assert.equal(isViewed(undefined, undefined), false);
+});
+
+test('isProtected matches branch names exactly', () => {
+  const list = ['main', 'master', 'develop', 'stage'];
+  assert.equal(isProtected('stage', list), true);
+  assert.equal(isProtected('main', list), true);
+  assert.equal(isProtected('feat/APPR-143-internal-app-id', list), false);
+  assert.equal(isProtected('stage-fix', list), false);
+  assert.equal(isProtected('Main', list), false);
+  assert.equal(isProtected('main', []), false);
+  assert.equal(isProtected('main', undefined), false);
 });
