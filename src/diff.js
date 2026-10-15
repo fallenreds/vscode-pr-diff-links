@@ -23,14 +23,13 @@ function register(context) {
 
 // `oldPath` is the left side of a rename. The PR key ("owner/repo#N") rides in both URIs, so a
 // diff tab can be matched to its PR in the tree, even one VS Code restored after a restart.
-async function openDiff(spec, log) {
-  const { repo, base, head, path: relPath, oldPath = relPath, line, title } = spec;
+async function openDiff(spec, { log, registry }) {
+  const { repo, url, base, head, path: relPath, oldPath = relPath, line, title } = spec;
   const prKey = spec.prKey || linkKey(spec);
-  if (!repo || !base || !head || !relPath) {
+  if ((!repo && !url) || !base || !head || !relPath) {
     throw new Error('Link must have repo, base, head and path');
   }
-  if (!fs.existsSync(repo)) throw new Error(`Repository folder not found: ${repo}`);
-  const root = (await git(repo, ['rev-parse', '--show-toplevel'])).trim();
+  const root = await resolveRoot(spec, registry);
 
   let mergeBase;
   try {
@@ -55,6 +54,19 @@ async function openDiff(spec, log) {
   log(`diff ${relPath}: ${mergeBase.slice(0, 7)} ↔ ${head} line=${n || '-'}`);
   await vscode.commands.executeCommand('vscode.diff', left, right, label, options);
   return { root };
+}
+
+// A worktree removed after the merge leaves its links pointing nowhere, but any known clone
+// of the same GitHub repository shares the commits.
+async function resolveRoot({ repo, url }, registry) {
+  if (repo && fs.existsSync(repo)) return (await git(repo, ['rev-parse', '--show-toplevel'])).trim();
+  const parsed = parsePrUrl(url);
+  if (parsed && registry) {
+    await registry.ready;
+    const known = registry.get(parsed.slug);
+    if (known) return known.root;
+  }
+  throw new Error(`Repository folder not found: ${repo}`);
 }
 
 function linkKey({ pr, url }) {

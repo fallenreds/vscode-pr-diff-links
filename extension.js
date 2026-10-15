@@ -87,7 +87,7 @@ async function run(spec) {
 
 async function showDiff(spec) {
   try {
-    return await diff.openDiff(spec, line => log.appendLine(line));
+    return await diff.openDiff(spec, { log: line => log.appendLine(line), registry });
   } catch (e) {
     fail(e.message || String(e));
   }
