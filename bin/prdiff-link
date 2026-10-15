@@ -12,6 +12,9 @@ except http(s)/mailto, file:// and vscode:// included.
 
 With --github the link points to the same place in the "Files changed" tab of the PR.
 
+The .prdiff file also names the PR (pr with --pr, url with --pr or --url): the extension
+then shows the PR in its tree and still finds a clone after the worktree is removed.
+
 --pr resolves BASE/HEAD to the PR's baseRefOid/headRefOid via gh, so links keep working
 after the PR is merged and its branches or worktrees are gone.
 """
@@ -73,6 +76,10 @@ def main():
         target = f"{url}/files#{anchor}"
     else:
         spec = {"repo": repo, "base": base, "head": head, "path": a.path}
+        if a.pr:
+            spec["pr"] = a.pr
+        if url:
+            spec["url"] = url
         if a.line:
             spec["line"] = a.line
         out_dir = os.path.abspath(a.out or os.path.join(cache_root, head[:12]))

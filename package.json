@@ -1,8 +1,8 @@
 {
   "name": "pr-diff-links",
   "displayName": "PR Diff Links",
-  "description": "Open a side-by-side diff of a pull request file from a link (plain .prdiff file path or vscode:// URI).",
-  "version": "0.1.0",
+  "description": "Open a side-by-side diff of a pull request file from a link (plain .prdiff file path or vscode:// URI) and browse pull requests as a file tree.",
+  "version": "0.2.0",
   "publisher": "fallenreds",
   "license": "UNLICENSED",
   "private": true,
@@ -10,6 +10,9 @@
     "vscode": "^1.90.0"
   },
   "main": "./extension.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "activationEvents": [
     "onUri",
     "onLanguage:prdiff",
@@ -26,7 +29,107 @@
           "PR diff link"
         ]
       }
-    ]
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "prDiffLinks",
+          "title": "PR Diff Links",
+          "icon": "media/pull-request.svg"
+        }
+      ]
+    },
+    "views": {
+      "prDiffLinks": [
+        {
+          "id": "prDiffLinks.tree",
+          "name": "Pull Requests"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "prDiffLinks.refresh",
+        "title": "Refresh",
+        "category": "PR Diff Links",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "prDiffLinks.push",
+        "title": "Push Branch",
+        "category": "PR Diff Links",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "prDiffLinks.openOnGitHub",
+        "title": "Open on GitHub",
+        "category": "PR Diff Links",
+        "icon": "$(globe)"
+      },
+      {
+        "command": "prDiffLinks.openFile",
+        "title": "Open Diff",
+        "category": "PR Diff Links"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "prDiffLinks.push",
+          "when": "false"
+        },
+        {
+          "command": "prDiffLinks.openOnGitHub",
+          "when": "false"
+        },
+        {
+          "command": "prDiffLinks.openFile",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "prDiffLinks.refresh",
+          "when": "view == prDiffLinks.tree",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "prDiffLinks.push",
+          "when": "view == prDiffLinks.tree && viewItem =~ /\\.local\\b/",
+          "group": "inline@1"
+        },
+        {
+          "command": "prDiffLinks.openOnGitHub",
+          "when": "view == prDiffLinks.tree && viewItem =~ /^pr\\b/",
+          "group": "inline@2"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "PR Diff Links",
+      "properties": {
+        "prDiffLinks.revealOnLinkOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reveal and select the file in the Pull Requests panel when a .prdiff link opens its diff. Revealing switches the sidebar to the panel, so turn this off if the panel shares the sidebar with a view you want to keep in front."
+        },
+        "prDiffLinks.protectedBranches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "main",
+            "master",
+            "develop",
+            "stage"
+          ],
+          "description": "Branches that are never pushed from the Pull Requests panel: a PR whose head is one of them gets no push button and no ↑N. Exact branch names."
+        }
+      }
+    }
   },
   "repository": {
     "type": "git",
