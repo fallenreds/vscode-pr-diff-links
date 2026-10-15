@@ -1,11 +1,12 @@
 const vscode = require('vscode');
 const { listPrs, viewPr, ensureCommits } = require('./github');
 const { diffFiles } = require('./git');
-const { buildFileTree, prKey } = require('./model');
+const { buildFileTree, filesUnder, isViewed, prKey } = require('./model');
 
 const TREE_SCHEME = 'prdiff-tree';
 const LINKS_KEY = 'links';
 const { Collapsed, Expanded, None } = vscode.TreeItemCollapsibleState;
+const { Checked, Unchecked } = vscode.TreeItemCheckboxState;
 
 const SECTIONS = [
   { id: 'links', label: 'From Links', expanded: true },
@@ -51,6 +52,7 @@ class PrTreeProvider {
     context.subscriptions.push(
       this.view,
       this.changed,
+      this.view.onDidChangeCheckboxState(e => this.markViewed(e.items)),
       vscode.window.registerFileDecorationProvider({ provideFileDecoration: decoration }),
     );
   }
@@ -91,6 +93,31 @@ class PrTreeProvider {
       oldPath: node.entry.oldPath,
       prKey: node.key,
     });
+  }
+
+  // Viewed marks live only in globalState: { [path]: blob }. A push that changes the file
+  // changes its blob, so the mark drops off, the same as on GitHub.
+  viewed(key) {
+    return this.state.get(`viewed:${key}`, {});
+  }
+
+  async markViewed(items) {
+    const updates = new Map();
+    for (const [node, state] of items) {
+      if (!node.files) continue;
+      const viewed = updates.get(node.key) || { ...this.viewed(node.key) };
+      for (const file of node.files) {
+        if (state === Checked) viewed[file.path] = file.blob;
+        else delete viewed[file.path];
+      }
+      updates.set(node.key, viewed);
+    }
+    for (const [key, viewed] of updates) await this.state.update(`viewed:${key}`, viewed);
+    this.changed.fire(this.prNodes([...updates.keys()]));
+  }
+
+  prNodes(keys) {
+    return this.sections.flatMap(section => keys.map(key => section.prNodes.get(key)).filter(Boolean));
   }
 
   openOnGitHub(node) {
@@ -214,6 +241,7 @@ class PrTreeProvider {
         name: entry.name,
         path: entry.path,
         entry: entry.file,
+        files: filesUnder(entry).map(file => file.file),
         parent,
       };
       if (entry.type === 'folder') node.children = entry.children.map(child => make(child, node));
@@ -226,6 +254,13 @@ class PrTreeProvider {
   }
 
   // --- items
+
+  // A folder counts as viewed when every file inside it is.
+  checkbox(node) {
+    const viewed = this.viewed(node.key);
+    const all = node.files.every(file => isViewed(viewed[file.path], file.blob));
+    return { state: all ? Checked : Unchecked, tooltip: 'Viewed' };
+  }
 
   sectionItem(node) {
     const item = new vscode.TreeItem(node.def.label, node.def.expanded ? Expanded : Collapsed);
@@ -250,6 +285,7 @@ class PrTreeProvider {
     const item = new vscode.TreeItem(node.name, Expanded);
     item.id = node.id;
     item.iconPath = vscode.ThemeIcon.Folder;
+    item.checkboxState = this.checkbox(node);
     item.resourceUri = vscode.Uri.from({ scheme: TREE_SCHEME, path: `/${node.path}` });
     item.contextValue = 'folder';
     return item;
@@ -260,6 +296,7 @@ class PrTreeProvider {
     const item = new vscode.TreeItem(node.name, None);
     item.id = node.id;
     item.iconPath = vscode.ThemeIcon.File;
+    item.checkboxState = this.checkbox(node);
     item.resourceUri = vscode.Uri.from({
       scheme: TREE_SCHEME,
       path: `/${entry.path}`,
