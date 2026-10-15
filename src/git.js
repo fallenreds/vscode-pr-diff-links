@@ -59,4 +59,39 @@ async function remotes(root) {
   return list;
 }
 
-module.exports = { git, exists, hasCommit, mergeBase, diffFiles, repoRoot, remotes };
+// Branch names cannot contain spaces, so "<sha> <ref>" splits safely.
+async function localBranches(root) {
+  const branches = new Map();
+  const out = await git(root, ['for-each-ref', '--format=%(objectname) %(refname)', 'refs/heads']);
+  for (const line of out.split('\n')) {
+    const [sha, ref] = line.split(' ');
+    if (ref) branches.set(ref.slice('refs/heads/'.length), sha);
+  }
+  return branches;
+}
+
+async function branchSha(root, branch) {
+  try {
+    return (await git(root, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}^{commit}`])).trim();
+  } catch {
+    return null;
+  }
+}
+
+async function aheadCount(root, from, branch) {
+  return Number((await git(root, ['rev-list', '--count', `${from}..refs/heads/${branch}`])).trim());
+}
+
+async function upstream(root, branch) {
+  return (await git(root, ['for-each-ref', '--format=%(upstream)', `refs/heads/${branch}`])).trim() || null;
+}
+
+async function push(root, remote, branch) {
+  const args = (await upstream(root, branch)) ? ['push', remote, branch] : ['push', '-u', remote, branch];
+  return git(root, args);
+}
+
+module.exports = {
+  git, exists, hasCommit, mergeBase, diffFiles, repoRoot, remotes,
+  localBranches, branchSha, aheadCount, upstream, push,
+};

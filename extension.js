@@ -29,6 +29,9 @@ function activate(context) {
     vscode.commands.registerCommand('prDiffLinks.refresh', () => tree.refresh()),
     vscode.commands.registerCommand('prDiffLinks.openFile', node => tree.openFile(node)),
     vscode.commands.registerCommand('prDiffLinks.openOnGitHub', node => tree.openOnGitHub(node)),
+    vscode.commands.registerCommand('prDiffLinks.push', node =>
+      tree.push(node).catch(e => fail(`Push failed: ${e.message.trim()}`)),
+    ),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       scanWorkspace();
       tree.refresh();

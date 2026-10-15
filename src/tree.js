@@ -1,10 +1,12 @@
 const vscode = require('vscode');
 const { listPrs, viewPr, ensureCommits } = require('./github');
-const { diffFiles } = require('./git');
+const { aheadCount, branchSha, diffFiles, hasCommit, localBranches, push } = require('./git');
 const { buildFileTree, filesUnder, isViewed, prKey } = require('./model');
 
 const TREE_SCHEME = 'prdiff-tree';
 const LINKS_KEY = 'links';
+const REFS_POLL_MS = 5000;
+const LISTS_POLL_MS = 5 * 60 * 1000;
 const { Collapsed, Expanded, None } = vscode.TreeItemCollapsibleState;
 const { Checked, Unchecked } = vscode.TreeItemCheckboxState;
 
@@ -53,8 +55,11 @@ class PrTreeProvider {
       this.view,
       this.changed,
       this.view.onDidChangeCheckboxState(e => this.markViewed(e.items)),
+      this.view.onDidChangeVisibility(() => this.schedule()),
+      { dispose: () => this.stopTimers() },
       vscode.window.registerFileDecorationProvider({ provideFileDecoration: decoration }),
     );
+    this.schedule();
   }
 
   getChildren(node) {
@@ -76,10 +81,95 @@ class PrTreeProvider {
     return messageItem(node);
   }
 
-  refresh() {
+  // Merged and closed PRs do not change, the periodic refresh skips them.
+  refresh({ openOnly = false } = {}) {
     for (const section of this.sections) section.loading = null;
-    for (const pr of this.prs.values()) pr.stale = true;
+    for (const pr of this.prs.values()) {
+      if (!openOnly || pr.info.state === 'OPEN') pr.stale = true;
+    }
     this.changed.fire();
+  }
+
+  // Local refs are cheap to read, so they are polled often: commits made outside VS Code
+  // (by Claude in a terminal) show up as ↑N without a refresh. GitHub lists are polled rarely.
+  schedule() {
+    this.stopTimers();
+    if (!this.view.visible) return;
+    this.refsTimer = setInterval(() => this.pollRefs(), REFS_POLL_MS);
+    this.listsTimer = setInterval(() => this.refresh({ openOnly: true }), LISTS_POLL_MS);
+    this.pollRefs();
+  }
+
+  stopTimers() {
+    clearInterval(this.refsTimer);
+    clearInterval(this.listsTimer);
+  }
+
+  async pollRefs() {
+    if (this.polling) return;
+    this.polling = true;
+    try {
+      const changed = await this.updateLocal([...this.prs.values()]);
+      if (changed.length) this.changed.fire(this.prNodes(changed.map(pr => pr.key)));
+    } finally {
+      this.polling = false;
+    }
+  }
+
+  // Worktrees share refs, so one for-each-ref per repository covers every checkout.
+  // Returns the PRs whose local branch or ↑N changed.
+  async updateLocal(prs) {
+    const byRoot = new Map();
+    for (const pr of prs) {
+      const repo = this.registry.get(pr.slug);
+      if (!repo) continue;
+      if (!byRoot.has(repo.root)) byRoot.set(repo.root, []);
+      byRoot.get(repo.root).push(pr);
+    }
+    const changed = [];
+    for (const [root, list] of byRoot) {
+      let branches;
+      try {
+        branches = await localBranches(root);
+      } catch (e) {
+        this.log(`refs ${root}: ${e.message}`);
+        continue;
+      }
+      for (const pr of list) {
+        const sha = pushable(pr.info) ? branches.get(pr.info.headRefName) || null : null;
+        const stamp = `${sha} ${pr.info.headRefOid}`;
+        if (pr.localStamp === stamp) continue;
+        pr.localStamp = stamp;
+        pr.localSha = sha;
+        pr.ahead = sha && sha !== pr.info.headRefOid ? await countAhead(root, pr.info) : 0;
+        changed.push(pr);
+      }
+    }
+    return changed;
+  }
+
+  async push(node) {
+    const pr = this.prs.get(node.key);
+    const repo = pr && this.registry.get(pr.slug);
+    if (!repo || !pr.localSha) return;
+    const branch = pr.info.headRefName;
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Pushing ${branch} to ${repo.remote}…` },
+      () => push(repo.root, repo.remote, branch),
+    );
+    this.log(`pushed ${branch} to ${repo.remote}`);
+    await this.reloadPr(pr, await branchSha(repo.root, branch));
+  }
+
+  // GitHub can take a moment to move the PR head after a push.
+  async reloadPr(pr, expectedHead) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt) await new Promise(resolve => setTimeout(resolve, 1500));
+      this.upsert(pr.slug, await viewPr(pr.slug, pr.number));
+      if (!expectedHead || pr.info.headRefOid === expectedHead) break;
+    }
+    await this.updateLocal([pr]);
+    this.changed.fire(this.prNodes([pr.key]));
   }
 
   async openFile(node) {
@@ -137,6 +227,7 @@ class PrTreeProvider {
     await this.registry.ready;
     const { prs, errors } = section.id === 'links' ? await this.loadLinks() : await this.loadList(section.def.search);
     const children = errors.map((text, i) => message(section, `error/${i}`, text, true));
+    await this.updateLocal(prs);
     for (const pr of prs) children.push(this.prNode(section, pr));
     if (!children.length) children.push(message(section, 'empty', emptyText(section, this.registry)));
     section.children = children;
@@ -270,14 +361,16 @@ class PrTreeProvider {
   }
 
   prItem(node) {
-    const { info } = this.prs.get(node.key);
+    const pr = this.prs.get(node.key);
+    const { info } = pr;
     const item = new vscode.TreeItem(info.title, Collapsed);
     item.id = node.id;
     const repoName = this.registry.list().length > 1 ? info.url.split('/')[4] : '';
-    item.description = [`${repoName}#${info.number}`, info.author && info.author.login].filter(Boolean).join(' · ');
+    const ahead = pr.ahead ? ` ↑${pr.ahead}` : '';
+    item.description = [`${repoName}#${info.number}`, info.author && info.author.login].filter(Boolean).join(' · ') + ahead;
     item.iconPath = prIcon(info);
-    item.tooltip = prTooltip(info);
-    item.contextValue = 'pr';
+    item.tooltip = prTooltip(info, pr);
+    item.contextValue = pr.localSha ? 'pr.local' : 'pr';
     return item;
   }
 
@@ -338,12 +431,28 @@ function prIcon(info) {
   return new vscode.ThemeIcon(icon, new vscode.ThemeColor(color));
 }
 
-function prTooltip(info) {
+// Pushing a fork branch or a finished PR would not update it.
+function pushable(info) {
+  return info.state === 'OPEN' && !info.isCrossRepository;
+}
+
+// Compared with the PR head on GitHub, not with origin/<branch>, which may be stale.
+async function countAhead(root, info) {
+  if (!(await hasCommit(root, info.headRefOid))) return 0;
+  try {
+    return await aheadCount(root, info.headRefOid, info.headRefName);
+  } catch {
+    return 0;
+  }
+}
+
+function prTooltip(info, pr) {
   const state = prState(info);
   const md = new vscode.MarkdownString();
   md.appendMarkdown('**').appendText(info.title).appendMarkdown('**\n\n');
   md.appendText(`#${info.number} · ${info.author ? info.author.login : 'unknown'} · ${state[0]}${state.slice(1).toLowerCase()}`);
   md.appendMarkdown('\n\n').appendText(`${info.headRefName} → ${info.baseRefName}`);
+  if (pr.ahead) md.appendText(` · ${pr.ahead} local commit${pr.ahead > 1 ? 's' : ''} not pushed`);
   md.appendMarkdown(`\n\n[${info.url}](${info.url})`);
   return md;
 }

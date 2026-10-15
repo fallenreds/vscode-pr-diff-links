@@ -55,6 +55,12 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "prDiffLinks.push",
+        "title": "Push Branch",
+        "category": "PR Diff Links",
+        "icon": "$(cloud-upload)"
+      },
+      {
         "command": "prDiffLinks.openOnGitHub",
         "title": "Open on GitHub",
         "category": "PR Diff Links",
@@ -68,6 +74,10 @@
     ],
     "menus": {
       "commandPalette": [
+        {
+          "command": "prDiffLinks.push",
+          "when": "false"
+        },
         {
           "command": "prDiffLinks.openOnGitHub",
           "when": "false"
@@ -85,6 +95,11 @@
         }
       ],
       "view/item/context": [
+        {
+          "command": "prDiffLinks.push",
+          "when": "view == prDiffLinks.tree && viewItem =~ /\\.local\\b/",
+          "group": "inline@1"
+        },
         {
           "command": "prDiffLinks.openOnGitHub",
           "when": "view == prDiffLinks.tree && viewItem =~ /^pr\\b/",
