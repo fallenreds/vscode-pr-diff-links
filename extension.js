@@ -59,6 +59,7 @@ function scanWorkspace() {
 
 // The .prdiff tab is only a trigger: close it and show the diff instead.
 async function handleEditor(editor) {
+  tree.revealEditor(editor).catch(e => log.appendLine(`reveal: ${e.message}`));
   if (!editor || !editor.document.uri.fsPath.endsWith('.prdiff')) return;
   const uri = editor.document.uri;
   log.appendLine(`file: ${uri.fsPath}`);
@@ -79,7 +80,9 @@ async function handleEditor(editor) {
 }
 
 async function run(spec) {
-  await showDiff(spec);
+  const opening = showDiff(spec);
+  tree.revealFromLink(spec, opening).catch(e => log.appendLine(`reveal: ${e.message}`));
+  await opening;
 }
 
 async function showDiff(spec) {

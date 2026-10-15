@@ -106,6 +106,16 @@
           "group": "inline@2"
         }
       ]
+    },
+    "configuration": {
+      "title": "PR Diff Links",
+      "properties": {
+        "prDiffLinks.revealOnLinkOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reveal and select the file in the Pull Requests panel when a .prdiff link opens its diff. Revealing switches the sidebar to the panel, so turn this off if the panel shares the sidebar with a view you want to keep in front."
+        }
+      }
     }
   },
   "repository": {

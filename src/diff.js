@@ -2,6 +2,7 @@ const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
 const { git, exists } = require('./git');
+const { parsePrUrl, prKey: keyOf } = require('./model');
 
 const EMPTY_SCHEME = 'prdiff-empty';
 const GIT_SCHEME = 'prdiff-git';
@@ -20,9 +21,11 @@ function register(context) {
   );
 }
 
-// `oldPath` is the left side of a rename. `prKey` ("owner/repo#N") rides in both URIs, so a
+// `oldPath` is the left side of a rename. The PR key ("owner/repo#N") rides in both URIs, so a
 // diff tab can be matched to its PR in the tree, even one VS Code restored after a restart.
-async function openDiff({ repo, base, head, path: relPath, oldPath = relPath, line, title, prKey }, log) {
+async function openDiff(spec, log) {
+  const { repo, base, head, path: relPath, oldPath = relPath, line, title } = spec;
+  const prKey = spec.prKey || linkKey(spec);
   if (!repo || !base || !head || !relPath) {
     throw new Error('Link must have repo, base, head and path');
   }
@@ -51,6 +54,12 @@ async function openDiff({ repo, base, head, path: relPath, oldPath = relPath, li
 
   log(`diff ${relPath}: ${mergeBase.slice(0, 7)} ↔ ${head} line=${n || '-'}`);
   await vscode.commands.executeCommand('vscode.diff', left, right, label, options);
+  return { root };
+}
+
+function linkKey({ pr, url }) {
+  const parsed = parsePrUrl(url);
+  return parsed ? keyOf(parsed.slug, Number(pr) || parsed.number) : undefined;
 }
 
 // The file path stays in the URI path so the diff editor picks the right language.

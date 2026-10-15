@@ -1,10 +1,12 @@
 const vscode = require('vscode');
 const { listPrs, viewPr, ensureCommits } = require('./github');
-const { aheadCount, branchSha, diffFiles, hasCommit, localBranches, push } = require('./git');
-const { buildFileTree, filesUnder, isViewed, prKey } = require('./model');
+const { aheadCount, branchSha, diffFiles, git, hasCommit, localBranches, push } = require('./git');
+const { buildFileTree, filesUnder, isViewed, parsePrUrl, prKey } = require('./model');
+const { EMPTY_SCHEME, GIT_SCHEME } = require('./diff');
 
 const TREE_SCHEME = 'prdiff-tree';
 const LINKS_KEY = 'links';
+const MAX_LINKS = 20;
 const REFS_POLL_MS = 5000;
 const LISTS_POLL_MS = 5 * 60 * 1000;
 const { Collapsed, Expanded, None } = vscode.TreeItemCollapsibleState;
@@ -43,6 +45,7 @@ class PrTreeProvider {
     this.log = log;
     this.openDiff = openDiff;
     this.prs = new Map();
+    this.linkPending = 0;
     this.changed = new vscode.EventEmitter();
     this.onDidChangeTreeData = this.changed.event;
     this.sections = SECTIONS.map(def => ({ kind: 'section', id: def.id, def, prNodes: new Map(), children: [] }));
@@ -213,6 +216,90 @@ class PrTreeProvider {
   openOnGitHub(node) {
     const pr = this.prs.get(node.key);
     if (pr) vscode.env.openExternal(vscode.Uri.parse(pr.info.url));
+  }
+
+  // --- reveal
+
+  // `opening` is the openDiff promise of a .prdiff link. The PR goes to the top of From Links,
+  // and the file is revealed there without taking focus from the diff.
+  async revealFromLink(spec, opening) {
+    this.linkPending++;
+    try {
+      const opened = await opening;
+      if (!opened) return;
+      const fromUrl = parsePrUrl(spec.url);
+      const slug = await this.registry.addFromLink(opened.root, fromUrl && fromUrl.slug);
+      if (!slug) return this.log(`reveal: no GitHub remote in ${opened.root}`);
+      const number = Number(spec.pr) || (fromUrl && fromUrl.number) || (await this.findPrNumber(slug, spec.head, opened.root));
+      if (!number) return this.log(`reveal: no pull request for ${spec.head} in ${slug}`);
+      await this.addLink(slug, number);
+      if (!vscode.workspace.getConfiguration('prDiffLinks').get('revealOnLinkOpen', true)) return;
+      const links = this.sections[0];
+      const prNode = links.prNodes.get(prKey(slug, number));
+      if (!prNode || !links.children.includes(prNode)) return;
+      await this.prChildren(prNode);
+      // A link made before the file left the PR selects the PR itself.
+      const target = (prNode.byPath && prNode.byPath.get(spec.path)) || prNode;
+      await this.view.reveal(target, { select: true, focus: false, expand: true });
+    } finally {
+      this.linkPending--;
+    }
+  }
+
+  // Old links carry only refs: find the PR by head SHA or branch, loaded ones first.
+  async findPrNumber(slug, head, dir) {
+    if (!head) return null;
+    let branch = head.replace(/^(?:refs\/heads\/|origin\/)/, '');
+    if (branch === 'HEAD') branch = (await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+    const isSha = /^[0-9a-f]{40}$/.test(head);
+    const matches = info => (isSha ? info.headRefOid === head : info.headRefName === branch);
+    for (const pr of this.prs.values()) {
+      if (pr.slug.toLowerCase() === slug.toLowerCase() && matches(pr.info)) return pr.number;
+    }
+    const found = await listPrs(slug, { state: 'all', search: isSha ? head : `head:${branch}`, limit: 10 });
+    const info = found.find(matches) || found[0];
+    return info ? this.upsert(slug, info).number : null;
+  }
+
+  async addLink(slug, number) {
+    const key = prKey(slug, number);
+    const links = this.state.get(LINKS_KEY, []).filter(link => prKey(link.slug, link.number) !== key);
+    await this.state.update(LINKS_KEY, [{ slug, number }, ...links].slice(0, MAX_LINKS));
+    const section = this.sections[0];
+    section.loading = null;
+    this.changed.fire(section);
+    await this.sectionChildren(section);
+  }
+
+  // The selection follows the active diff tab, but only while the panel is visible:
+  // revealing a hidden view would switch the sidebar.
+  async revealEditor(editor) {
+    if (!editor || !this.view.visible || this.linkPending) return;
+    const { scheme, query } = editor.document.uri;
+    if (scheme !== GIT_SCHEME && scheme !== EMPTY_SCHEME) return;
+    let tag;
+    try {
+      tag = JSON.parse(query);
+    } catch {
+      return;
+    }
+    const prNode = tag.pr && tag.file && this.findPrNode(tag.pr);
+    if (!prNode) return;
+    await this.prChildren(prNode);
+    const node = prNode.byPath && prNode.byPath.get(tag.file);
+    if (node && this.view.selection[0] !== node) await this.view.reveal(node, { select: true, focus: false });
+  }
+
+  // The section of the current selection comes first, so a click in All Open stays there.
+  findPrNode(key) {
+    let current = this.view.selection[0];
+    while (current && current.parent) current = current.parent;
+    const order = current ? [current, ...this.sections.filter(s => s !== current)] : this.sections;
+    for (const section of order) {
+      const node = section.prNodes.get(key);
+      if (node && section.children.includes(node)) return node;
+    }
+    return null;
   }
 
   // --- loading
