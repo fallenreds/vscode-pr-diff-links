@@ -1,7 +1,7 @@
 const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
-const { git, exists } = require('./git');
+const { git, exists, repoRoot } = require('./git');
 const { parsePrUrl, prKey: keyOf } = require('./model');
 
 const EMPTY_SCHEME = 'prdiff-empty';
@@ -56,10 +56,15 @@ async function openDiff(spec, { log, registry }) {
   return { root };
 }
 
-// A worktree removed after the merge leaves its links pointing nowhere, but any known clone
-// of the same GitHub repository shares the commits.
-async function resolveRoot({ repo, url }, registry) {
-  if (repo && fs.existsSync(repo)) return (await git(repo, ['rev-parse', '--show-toplevel'])).trim();
+// Commits are shared by all worktrees, so SHA links resolve in the main clone, the same root
+// the tree uses: a link and a tree click then open one tab, not two. A symbolic ref such as
+// HEAD belongs to its worktree. A worktree removed after the merge leaves its links pointing
+// nowhere, but any known clone of the same GitHub repository shares the commits.
+async function resolveRoot({ repo, url, base, head }, registry) {
+  if (repo && fs.existsSync(repo)) {
+    if (isSha(base) && isSha(head)) return repoRoot(repo);
+    return (await git(repo, ['rev-parse', '--show-toplevel'])).trim();
+  }
   const parsed = parsePrUrl(url);
   if (parsed && registry) {
     await registry.ready;
@@ -83,8 +88,10 @@ function gitUri(root, ref, relPath, tag) {
   });
 }
 
+const isSha = ref => /^[0-9a-f]{40}$/.test(ref);
+
 function shortRef(ref) {
-  return /^[0-9a-f]{40}$/.test(ref) ? ref.slice(0, 7) : ref.replace(/^origin\//, '');
+  return isSha(ref) ? ref.slice(0, 7) : ref.replace(/^origin\//, '');
 }
 
 module.exports = { register, openDiff, EMPTY_SCHEME, GIT_SCHEME };
