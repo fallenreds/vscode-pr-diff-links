@@ -9,6 +9,8 @@ const {
   filesUnder,
   isViewed,
   isProtected,
+  parseWorktrees,
+  byWorkspace,
 } = require('../src/model');
 
 test('parseGitHubRemote reads ssh and https remotes', () => {
@@ -148,4 +150,26 @@ test('isProtected matches branch names exactly', () => {
   assert.equal(isProtected('Main', list), false);
   assert.equal(isProtected('main', []), false);
   assert.equal(isProtected('main', undefined), false);
+});
+
+test('parseWorktrees reads every checkout and skips bare and prunable ones', () => {
+  const out = [
+    'worktree /repo', 'HEAD aaa', 'detached', '',
+    'worktree /repo/.worktrees/X', 'HEAD bbb', 'branch refs/heads/feat/x', '',
+    'worktree /gone', 'HEAD ccc', 'branch refs/heads/old', 'prunable gitdir file points to non-existent location', '',
+    'worktree /bare.git', 'bare', '',
+  ].join('\n');
+  assert.deepEqual(parseWorktrees(out), [
+    { path: '/repo', head: 'aaa' },
+    { path: '/repo/.worktrees/X', head: 'bbb' },
+  ]);
+});
+
+test('byWorkspace puts the checkout whose file is in the window first', () => {
+  const list = [{ path: '/repo' }, { path: '/repo/.worktrees/X' }, { path: '/other' }];
+  const order = dirs => byWorkspace(list, dirs, 'api/app/x.py').map(c => c.path);
+  assert.deepEqual(order(['/repo/.worktrees/X/api']), ['/repo/.worktrees/X', '/repo', '/other']);
+  assert.deepEqual(order(['/repo']), ['/repo', '/repo/.worktrees/X', '/other']);
+  assert.deepEqual(order(['/other']), ['/other', '/repo', '/repo/.worktrees/X']);
+  assert.deepEqual(order([]), ['/repo', '/repo/.worktrees/X', '/other']);
 });

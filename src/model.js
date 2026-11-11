@@ -97,4 +97,37 @@ function isProtected(branch, protectedBranches) {
   return Array.isArray(protectedBranches) && protectedBranches.includes(branch);
 }
 
-module.exports = { parseGitHubRemote, parsePrUrl, prKey, parseDiffRaw, buildFileTree, filesUnder, isViewed, isProtected };
+// `git worktree list --porcelain`: one block per checkout, the main clone first.
+function parseWorktrees(stdout) {
+  const list = [];
+  for (const block of stdout.split(/\n\n+/)) {
+    const fields = Object.fromEntries(
+      block.split('\n').filter(Boolean).map(line => {
+        const space = line.indexOf(' ');
+        return space < 0 ? [line, true] : [line.slice(0, space), line.slice(space + 1)];
+      }),
+    );
+    if (fields.worktree && fields.HEAD && !fields.bare && !fields.prunable) list.push({ path: fields.worktree, head: fields.HEAD });
+  }
+  return list;
+}
+
+// Checkouts whose copy of the file lies in a workspace folder come first: language servers index
+// only those. The sort is stable, so on a tie the main clone, listed first by git, wins.
+function byWorkspace(checkouts, workspaceDirs, relPath) {
+  const indexed = dir => workspaceDirs.some(ws => `${dir}/${relPath}`.startsWith(`${ws}/`));
+  return [...checkouts.filter(c => indexed(c.path)), ...checkouts.filter(c => !indexed(c.path))];
+}
+
+module.exports = {
+  parseGitHubRemote,
+  parsePrUrl,
+  prKey,
+  parseDiffRaw,
+  buildFileTree,
+  filesUnder,
+  isViewed,
+  isProtected,
+  parseWorktrees,
+  byWorkspace,
+};

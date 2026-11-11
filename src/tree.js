@@ -230,29 +230,46 @@ class PrTreeProvider {
   // --- reveal
 
   // `opening` is the openDiff promise of a .prdiff link. The PR goes to the top of From Links,
-  // and the file is revealed there without taking focus from the diff.
+  // and the file is revealed there without taking focus from the diff. Every step is logged:
+  // the last line shows where a reveal stopped.
   async revealFromLink(spec, opening) {
     this.linkPending++;
     try {
+      this.log(`reveal: ${spec.path} head=${String(spec.head).slice(0, 7)}`);
       const opened = await opening;
-      if (!opened) return;
+      if (!opened) return this.log('reveal: skipped, the diff did not open');
       const fromUrl = parsePrUrl(spec.url);
       const slug = await this.registry.addFromLink(opened.root, fromUrl && fromUrl.slug);
       if (!slug) return this.log(`reveal: no GitHub remote in ${opened.root}`);
-      const number = Number(spec.pr) || (fromUrl && fromUrl.number) || (await this.findPrNumber(slug, spec.head, opened.root));
-      if (!number) return this.log(`reveal: no pull request for ${spec.head} in ${slug}`);
-      await this.addLink(slug, number);
-      if (!vscode.workspace.getConfiguration('prDiffLinks').get('revealOnLinkOpen', true)) return;
+      this.log(`reveal: repo ${slug} at ${opened.root}`);
+      const found = await this.linkPr(slug, spec, fromUrl, opened.root);
+      if (!found) return this.log(`reveal: no pull request for ${spec.head} in ${slug}`);
+      this.log(`reveal: PR #${found.number} from ${found.source}`);
+      await this.addLink(slug, found.number);
+      this.log(`reveal: added ${slug}#${found.number} to From Links`);
+      if (!vscode.workspace.getConfiguration('prDiffLinks').get('revealOnLinkOpen', true)) {
+        return this.log('reveal: skipped, prDiffLinks.revealOnLinkOpen is off');
+      }
       const links = this.sections[0];
-      const prNode = links.prNodes.get(prKey(slug, number));
-      if (!prNode || !links.children.includes(prNode)) return;
+      const prNode = links.prNodes.get(prKey(slug, found.number));
+      if (!prNode || !links.children.includes(prNode)) {
+        return this.log(`reveal: ${slug}#${found.number} is not listed in From Links, see the error there`);
+      }
       await this.prChildren(prNode);
       // A link made before the file left the PR selects the PR itself.
       const target = (prNode.byPath && prNode.byPath.get(spec.path)) || prNode;
       await this.view.reveal(target, { select: true, focus: false, expand: true });
+      if (target !== prNode) this.log(`reveal: revealed ${target.id}`);
+      else this.log(`reveal: revealed PR ${prNode.id}, ${prNode.byPath ? 'file not in head' : 'files not loaded'}`);
     } finally {
       this.linkPending--;
     }
+  }
+
+  async linkPr(slug, spec, fromUrl, dir) {
+    if (Number(spec.pr)) return { number: Number(spec.pr), source: 'pr' };
+    if (fromUrl) return { number: fromUrl.number, source: 'url' };
+    return this.findPrNumber(slug, spec.head, dir);
   }
 
   // Old links carry only refs: find the PR by head SHA or branch, loaded ones first.
@@ -263,11 +280,13 @@ class PrTreeProvider {
     const isSha = /^[0-9a-f]{40}$/.test(head);
     const matches = info => (isSha ? info.headRefOid === head : info.headRefName === branch);
     for (const pr of this.prs.values()) {
-      if (pr.slug.toLowerCase() === slug.toLowerCase() && matches(pr.info)) return pr.number;
+      if (pr.slug.toLowerCase() === slug.toLowerCase() && matches(pr.info)) return { number: pr.number, source: 'loaded' };
     }
-    const found = await listPrs(slug, { state: 'all', search: isSha ? head : `head:${branch}`, limit: 10 });
+    const search = isSha ? head : `head:${branch}`;
+    this.log(`reveal: searching gh for ${isSha ? head.slice(0, 7) : search}`);
+    const found = await listPrs(slug, { state: 'all', search, limit: 10 });
     const info = found.find(matches) || found[0];
-    return info ? this.upsert(slug, info).number : null;
+    return info ? { number: this.upsert(slug, info).number, source: 'gh search' } : null;
   }
 
   async addLink(slug, number) {
@@ -284,7 +303,10 @@ class PrTreeProvider {
   // revealing a hidden view would switch the sidebar.
   async revealEditor(editor) {
     if (!editor || !this.view.visible || this.linkPending) return;
-    const { scheme, query } = editor.document.uri;
+    // The head side may be a file on disk; the base side always carries the PR tag.
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+    const uri = input instanceof vscode.TabInputTextDiff ? input.original : editor.document.uri;
+    const { scheme, query } = uri;
     if (scheme !== GIT_SCHEME && scheme !== EMPTY_SCHEME) return;
     let tag;
     try {
