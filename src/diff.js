@@ -2,7 +2,7 @@ const vscode = require('vscode');
 const path = require('path');
 const fs = require('fs');
 const { git, exists, repoRoot } = require('./git');
-const { parsePrUrl, prKey: keyOf } = require('./model');
+const { byWorkspace, parsePrUrl, parseWorktrees, prKey: keyOf } = require('./model');
 
 const EMPTY_SCHEME = 'prdiff-empty';
 const GIT_SCHEME = 'prdiff-git';
@@ -44,7 +44,7 @@ async function openDiff(spec, { log, registry }) {
       ? gitUri(root, ref, filePath, tag)
       : vscode.Uri.from({ scheme: EMPTY_SCHEME, path: `/${filePath}`, query: JSON.stringify({ side: name, ...tag }) });
   const left = await side(mergeBase, oldPath, 'base');
-  const right = await side(head, relPath, 'head');
+  const right = (await headFile(root, head, relPath, log)) || (await side(head, relPath, 'head'));
 
   const label = title || `${path.basename(relPath)} (${shortRef(base)} ↔ ${shortRef(head)})`;
   const options = { preview: false };
@@ -54,6 +54,29 @@ async function openDiff(spec, { log, registry }) {
   log(`diff ${relPath}: ${mergeBase.slice(0, 7)} ↔ ${head} line=${n || '-'}`);
   await vscode.commands.executeCommand('vscode.diff', left, right, label, options);
   return { root };
+}
+
+// The head side opens from disk when a checkout of the repository (the main clone, detached or
+// not, or a worktree) stands on the head commit and its copy of the file is unchanged. Go to
+// definition and find references work only on files, never on `git show` snapshots.
+async function headFile(root, head, relPath, log) {
+  let sha;
+  try {
+    sha = (await git(root, ['rev-parse', '--verify', `${head}^{commit}`])).trim();
+  } catch {
+    return undefined;
+  }
+  const dirs = (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+  const checkouts = byWorkspace(parseWorktrees(await git(root, ['worktree', 'list', '--porcelain'])), dirs, relPath);
+  for (const { path: dir, head: at } of checkouts) {
+    if (at !== sha) continue;
+    const file = path.join(dir, relPath);
+    if (!fs.existsSync(file)) continue;
+    if ((await git(dir, ['status', '--porcelain', '--', relPath])).trim()) continue;
+    log(`head side from disk: ${file}`);
+    return vscode.Uri.file(file);
+  }
+  return undefined;
 }
 
 // Commits are shared by all worktrees, so SHA links resolve in the main clone, the same root

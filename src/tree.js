@@ -303,7 +303,10 @@ class PrTreeProvider {
   // revealing a hidden view would switch the sidebar.
   async revealEditor(editor) {
     if (!editor || !this.view.visible || this.linkPending) return;
-    const { scheme, query } = editor.document.uri;
+    // The head side may be a file on disk; the base side always carries the PR tag.
+    const input = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+    const uri = input instanceof vscode.TabInputTextDiff ? input.original : editor.document.uri;
+    const { scheme, query } = uri;
     if (scheme !== GIT_SCHEME && scheme !== EMPTY_SCHEME) return;
     let tag;
     try {
